@@ -31,6 +31,16 @@ class NodeConfig:
 
 
 @dataclass
+class DirectionalOverrides:
+    """Per-direction parameter overrides for one side of an edge.
+    Any field left as None inherits the symmetric EdgeConfig default."""
+    loss:       Optional[float] = None
+    latency_ms: Optional[float] = None
+    snr:        Optional[float] = None
+    rssi:       Optional[float] = None
+
+
+@dataclass
 class EdgeConfig:
     a: str
     b: str
@@ -38,6 +48,11 @@ class EdgeConfig:
     latency_ms: float = 0.0   # one-way propagation delay
     snr: float = 6.0          # SNR delivered to receiver (dB)
     rssi: float = -90.0       # RSSI delivered to receiver (dBm)
+    # Optional per-direction overrides.  None means "use the symmetric default".
+    # a_to_b: parameters as seen by b when a transmits.
+    # b_to_a: parameters as seen by a when b transmits.
+    a_to_b: Optional[DirectionalOverrides] = None
+    b_to_a: Optional[DirectionalOverrides] = None
 
 
 @dataclass
@@ -61,6 +76,18 @@ class TopologyConfig:
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
+def _parse_directional(raw: dict) -> Optional[DirectionalOverrides]:
+    """Parse an a_to_b / b_to_a sub-object.  Returns None if absent or empty."""
+    if not raw:
+        return None
+    return DirectionalOverrides(
+        loss=       float(raw["loss"])       if "loss"       in raw else None,
+        latency_ms= float(raw["latency_ms"]) if "latency_ms" in raw else None,
+        snr=        float(raw["snr"])        if "snr"        in raw else None,
+        rssi=       float(raw["rssi"])       if "rssi"       in raw else None,
+    )
+
 
 def load_topology(path: str) -> TopologyConfig:
     with open(path) as f:
@@ -93,6 +120,8 @@ def load_topology(path: str) -> TopologyConfig:
             latency_ms=float(e.get("latency_ms", 0.0)),
             snr=float(e.get("snr", 6.0)),
             rssi=float(e.get("rssi", -90.0)),
+            a_to_b=_parse_directional(e.get("a_to_b", {})),
+            b_to_a=_parse_directional(e.get("b_to_a", {})),
         ))
 
     sim_raw = raw.get("simulation", {})

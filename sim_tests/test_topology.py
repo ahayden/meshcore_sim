@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.config import EdgeConfig, NodeConfig, SimulationConfig, TopologyConfig
+from orchestrator.config import DirectionalOverrides, EdgeConfig, NodeConfig, SimulationConfig, TopologyConfig
 from orchestrator.topology import Topology
 from sim_tests.helpers import linear_three_config
 
@@ -198,6 +198,110 @@ class TestTopologyStarFive(unittest.TestCase):
 
     def test_endpoint_count(self):
         self.assertEqual(len(self.topo.endpoint_names()), 4)
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric edges — per-direction override resolution
+# ---------------------------------------------------------------------------
+
+class TestTopologyAsymmetricEdge(unittest.TestCase):
+    """
+    Verifies that directional overrides are applied to the correct EdgeLink
+    and that unoverridden fields fall back to the symmetric base value.
+
+    Setup: tx → rx edge with:
+      symmetric base: loss=0.1, latency_ms=20, snr=8, rssi=-85
+      a_to_b (tx→rx): snr=14, rssi=-70   (only RF quality overridden)
+      b_to_a (rx→tx): loss=1.0           (one-way: total loss in return direction)
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cfg = TopologyConfig(
+            nodes=[
+                NodeConfig(name="tx", relay=False),
+                NodeConfig(name="rx", relay=False),
+            ],
+            edges=[
+                EdgeConfig(
+                    a="tx", b="rx",
+                    loss=0.1, latency_ms=20.0, snr=8.0, rssi=-85.0,
+                    a_to_b=DirectionalOverrides(snr=14.0, rssi=-70.0),
+                    b_to_a=DirectionalOverrides(loss=1.0),
+                )
+            ],
+            simulation=SimulationConfig(),
+        )
+        cls.topo = Topology(cfg)
+        cls.tx_link = cls.topo.neighbours("tx")[0]   # tx → rx
+        cls.rx_link = cls.topo.neighbours("rx")[0]   # rx → tx
+
+    # -- forward direction (tx → rx): SNR and RSSI overridden --
+
+    def test_forward_snr_overridden(self):
+        self.assertAlmostEqual(self.tx_link.snr, 14.0)
+
+    def test_forward_rssi_overridden(self):
+        self.assertAlmostEqual(self.tx_link.rssi, -70.0)
+
+    def test_forward_loss_inherits_base(self):
+        self.assertAlmostEqual(self.tx_link.loss, 0.1)
+
+    def test_forward_latency_inherits_base(self):
+        self.assertAlmostEqual(self.tx_link.latency_ms, 20.0)
+
+    # -- reverse direction (rx → tx): loss overridden, rest inherits base --
+
+    def test_reverse_loss_is_one(self):
+        self.assertAlmostEqual(self.rx_link.loss, 1.0)
+
+    def test_reverse_snr_inherits_base(self):
+        self.assertAlmostEqual(self.rx_link.snr, 8.0)
+
+    def test_reverse_rssi_inherits_base(self):
+        self.assertAlmostEqual(self.rx_link.rssi, -85.0)
+
+    def test_reverse_latency_inherits_base(self):
+        self.assertAlmostEqual(self.rx_link.latency_ms, 20.0)
+
+    # -- directions are independent --
+
+    def test_forward_and_reverse_differ(self):
+        self.assertNotAlmostEqual(self.tx_link.snr,  self.rx_link.snr)
+        self.assertNotAlmostEqual(self.tx_link.loss, self.rx_link.loss)
+
+
+class TestTopologySymmetricRegressionAfterChange(unittest.TestCase):
+    """
+    Proves that a plain EdgeConfig (no directional overrides) still
+    produces identical parameters in both directions.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cfg = TopologyConfig(
+            nodes=[NodeConfig(name="p"), NodeConfig(name="q")],
+            edges=[EdgeConfig(a="p", b="q", loss=0.2, latency_ms=30.0,
+                              snr=7.0, rssi=-88.0)],
+            simulation=SimulationConfig(),
+        )
+        cls.topo = Topology(cfg)
+
+    def test_both_directions_have_same_loss(self):
+        p_link = self.topo.neighbours("p")[0]
+        q_link = self.topo.neighbours("q")[0]
+        self.assertAlmostEqual(p_link.loss, q_link.loss)
+        self.assertAlmostEqual(p_link.loss, 0.2)
+
+    def test_both_directions_have_same_latency(self):
+        p_link = self.topo.neighbours("p")[0]
+        q_link = self.topo.neighbours("q")[0]
+        self.assertAlmostEqual(p_link.latency_ms, q_link.latency_ms)
+
+    def test_both_directions_have_same_snr(self):
+        p_link = self.topo.neighbours("p")[0]
+        q_link = self.topo.neighbours("q")[0]
+        self.assertAlmostEqual(p_link.snr, q_link.snr)
 
 
 if __name__ == "__main__":

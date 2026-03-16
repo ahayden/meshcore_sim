@@ -14,6 +14,7 @@ import unittest
 
 from orchestrator.config import (
     AdversarialConfig,
+    DirectionalOverrides,
     EdgeConfig,
     NodeConfig,
     SimulationConfig,
@@ -250,6 +251,120 @@ class TestLoadTopologyFromInlineJSON(unittest.TestCase):
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             load_topology("/nonexistent/path/topology.json")
+
+
+# ---------------------------------------------------------------------------
+# DirectionalOverrides dataclass
+# ---------------------------------------------------------------------------
+
+class TestDirectionalOverridesDataclass(unittest.TestCase):
+
+    def test_all_fields_default_none(self):
+        d = DirectionalOverrides()
+        self.assertIsNone(d.loss)
+        self.assertIsNone(d.latency_ms)
+        self.assertIsNone(d.snr)
+        self.assertIsNone(d.rssi)
+
+    def test_partial_fields_set(self):
+        d = DirectionalOverrides(loss=0.9)
+        self.assertAlmostEqual(d.loss, 0.9)
+        self.assertIsNone(d.snr)
+        self.assertIsNone(d.latency_ms)
+        self.assertIsNone(d.rssi)
+
+    def test_all_fields_set(self):
+        d = DirectionalOverrides(loss=0.1, latency_ms=5.0, snr=12.0, rssi=-70.0)
+        self.assertAlmostEqual(d.loss, 0.1)
+        self.assertAlmostEqual(d.latency_ms, 5.0)
+        self.assertAlmostEqual(d.snr, 12.0)
+        self.assertAlmostEqual(d.rssi, -70.0)
+
+    def test_edge_config_directional_fields_default_none(self):
+        e = EdgeConfig(a="x", b="y")
+        self.assertIsNone(e.a_to_b)
+        self.assertIsNone(e.b_to_a)
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric edge loading from inline JSON
+# ---------------------------------------------------------------------------
+
+class TestLoadTopologyAsymmetricEdge(unittest.TestCase):
+
+    def _load(self, data: dict) -> TopologyConfig:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            return load_topology(path)
+        finally:
+            os.unlink(path)
+
+    def _edge_with(self, **extras) -> dict:
+        base = {
+            "nodes": [{"name": "x"}, {"name": "y"}],
+            "edges": [{"a": "x", "b": "y", "loss": 0.1,
+                       "latency_ms": 20.0, "snr": 8.0, "rssi": -85.0}],
+        }
+        base["edges"][0].update(extras)
+        return base
+
+    def test_symmetric_edge_no_directional_fields(self):
+        topo = self._load(self._edge_with())
+        self.assertIsNone(topo.edges[0].a_to_b)
+        self.assertIsNone(topo.edges[0].b_to_a)
+
+    def test_a_to_b_partial_snr_override(self):
+        topo = self._load(self._edge_with(a_to_b={"snr": 15.0}))
+        self.assertIsNotNone(topo.edges[0].a_to_b)
+        self.assertAlmostEqual(topo.edges[0].a_to_b.snr, 15.0)
+        self.assertIsNone(topo.edges[0].a_to_b.loss)   # not overridden
+
+    def test_b_to_a_one_way_loss(self):
+        topo = self._load(self._edge_with(b_to_a={"loss": 1.0}))
+        self.assertIsNotNone(topo.edges[0].b_to_a)
+        self.assertAlmostEqual(topo.edges[0].b_to_a.loss, 1.0)
+        self.assertIsNone(topo.edges[0].b_to_a.snr)
+        self.assertIsNone(topo.edges[0].a_to_b)        # other direction absent
+
+    def test_both_directions_independent(self):
+        topo = self._load(self._edge_with(
+            a_to_b={"latency_ms": 5.0},
+            b_to_a={"latency_ms": 50.0},
+        ))
+        self.assertAlmostEqual(topo.edges[0].a_to_b.latency_ms, 5.0)
+        self.assertAlmostEqual(topo.edges[0].b_to_a.latency_ms, 50.0)
+
+    def test_empty_directional_object_treated_as_none(self):
+        # An empty {} sub-object is equivalent to omitting the key entirely.
+        topo = self._load(self._edge_with(a_to_b={}))
+        self.assertIsNone(topo.edges[0].a_to_b)
+
+    def test_all_four_directional_fields_parseable(self):
+        topo = self._load(self._edge_with(
+            a_to_b={"loss": 0.2, "latency_ms": 10.0, "snr": 12.0, "rssi": -70.0}
+        ))
+        d = topo.edges[0].a_to_b
+        self.assertAlmostEqual(d.loss,       0.2)
+        self.assertAlmostEqual(d.latency_ms, 10.0)
+        self.assertAlmostEqual(d.snr,        12.0)
+        self.assertAlmostEqual(d.rssi,       -70.0)
+
+    def test_asymmetric_hill_topology_loads(self):
+        topo = load_topology(os.path.join(TOPO_DIR, "asymmetric_hill.json"))
+        edges_by_pair = {(e.a, e.b): e for e in topo.edges}
+        e = edges_by_pair[("base_camp", "hill_relay")]
+        self.assertIsNotNone(e.a_to_b)
+        self.assertIsNotNone(e.b_to_a)
+        self.assertAlmostEqual(e.a_to_b.snr,  14.0)
+        self.assertAlmostEqual(e.b_to_a.loss,  0.15)
+        # deep_valley edge: only b_to_a override
+        e2 = edges_by_pair[("deep_valley", "hill_relay")]
+        self.assertIsNone(e2.a_to_b)
+        self.assertAlmostEqual(e2.b_to_a.loss, 1.0)
 
 
 if __name__ == "__main__":
