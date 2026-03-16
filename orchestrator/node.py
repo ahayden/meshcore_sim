@@ -44,7 +44,8 @@ class NodeAgent:
         self.state = NodeState(name=config.name)
 
         self._proc: Optional[asyncio.subprocess.Process] = None
-        self._ready_event = asyncio.Event()
+        # Lazy-initialised inside start() so construction works outside a running loop.
+        self._ready_event: Optional[asyncio.Event] = None
 
         # Set by PacketRouter / MetricsCollector after construction
         self.tx_callback: Optional[TxCallback] = None
@@ -56,6 +57,7 @@ class NodeAgent:
 
     async def start(self) -> None:
         """Spawn the subprocess and begin reading its stdout."""
+        self._ready_event = asyncio.Event()
         cmd = self._build_cmd()
         log.debug("[%s] spawning: %s", self.config.name, " ".join(cmd))
         self._proc = await asyncio.create_subprocess_exec(
@@ -70,6 +72,8 @@ class NodeAgent:
 
     async def wait_ready(self, timeout: float = 10.0) -> None:
         """Block until the node emits its 'ready' line."""
+        if self._ready_event is None:
+            raise RuntimeError("wait_ready() called before start()")
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
 
     async def quit(self) -> None:
