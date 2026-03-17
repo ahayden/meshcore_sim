@@ -1,7 +1,7 @@
 # meshcore_sim
 
 A discrete-event simulator for [MeshCore](https://github.com/meshcore-dev/MeshCore)
-mesh networks.  Each simulated node runs the **real MeshCore routing and
+mesh networks, written entirely in Claude Code.  Each simulated node runs the **real MeshCore routing and
 cryptography code** as a standalone subprocess; a Python orchestrator wires
 them together over simulated radio links with configurable loss, latency, SNR,
 RSSI, and adversarial behaviour.
