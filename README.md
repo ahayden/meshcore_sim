@@ -26,8 +26,9 @@ $ python3 -m orchestrator topologies/linear_three.json --duration 30 --seed 42
 4. [Building the node agent](#building-the-node-agent)
 5. [Running the tests](#running-the-tests)
 6. [Orchestrator reference](#orchestrator-reference)
-7. [Topology file format](#topology-file-format)
-8. [Architecture](#architecture)
+7. [Topology visualiser](#topology-visualiser)
+8. [Topology file format](#topology-file-format)
+9. [Architecture](#architecture)
 
 ---
 
@@ -347,6 +348,60 @@ The **witnesses** count for a packet is the number of (sender→receiver) radio
 transmissions involving that packet that the orchestrator observed.  This is
 the key privacy metric: a packet with many witnesses was seen by many nodes,
 making it easier for a network-level adversary to correlate it across the mesh.
+
+---
+
+## Topology visualiser
+
+The `viz/` package renders topology JSON files and optional packet traces in a
+browser tab.  Install the dependencies first (one-time):
+
+```sh
+pip install -r requirements.txt
+```
+
+### Phase 1 — static topology viewer
+
+```sh
+python3 -m viz topologies/boston_relays.json
+python3 -m viz topologies/grid_10x10.json --port 8051
+```
+
+- **Geo-aware layout** when every node has `lat`/`lon`: plotted on an
+  OpenStreetMap tile layer.  Nodes coloured by role (relay = blue, room-server
+  = amber, endpoint = grey).
+- **Force-directed layout** for synthetic topologies (no coordinates): uses
+  dash-cytoscape's `cose` algorithm.
+- Hover over any node or edge for full detail (role, loss, latency, SNR, RSSI).
+
+### Phase 2 — packet trace overlay
+
+```sh
+# Record a trace during the simulation
+python3 -m orchestrator topologies/linear_three.json \
+    --duration 30 --seed 42 --trace-out trace.json
+
+# Open the visualiser with the trace
+python3 -m viz topologies/linear_three.json --trace trace.json
+```
+
+Phase 2 features:
+
+- **Witness heatmap** — nodes coloured by how many packets they received
+  (white = 0, deep red = max).  High-exposure nodes are privacy hot-spots.
+- **Packet step-through** — slider to select any recorded packet; orange
+  nodes are senders, green nodes are receivers for that packet.
+- **Play / Pause** with speed control (0.5× – 5×) to auto-animate through
+  packets in time order.
+- **Hop-by-hop view** — a second slider zooms in on a single packet and
+  steps through each individual (sender → receiver) link.  Watch a flood
+  or direct delivery propagate node-by-node.
+- **Animate hops** checkbox — when enabled, Play/Pause drives the hop slider
+  instead of the packet slider, letting you watch an entire trace unfold
+  at the hop level without touching the sliders manually.
+- **Trace validation** — if the trace was recorded with a different topology,
+  a red warning banner appears in the sidebar.  The trace JSON now embeds
+  the topology filename and node list for this cross-check.
 
 ---
 

@@ -37,7 +37,7 @@ Success criteria:
 
 ---
 
-## Simulator state  (as of 2026-03-16)
+## Simulator state  (as of 2026-03-17)
 
 ### What exists
 
@@ -67,6 +67,11 @@ Success criteria:
 | `viz/` — Phase 1 static topology viewer (geo map + force-directed, node labels, hover info) | ✅ complete |
 | `viz/` — Phase 2 trace overlay: witness heatmap, packet slider, sender/receiver highlight | ✅ complete |
 | `--trace-out FILE` flag on orchestrator — exports `PacketTracer` data to JSON for viz | ✅ complete |
+| `viz/` — Play/Pause animation with speed control (0.5×–5×) through packet sequence | ✅ complete |
+| `viz/` — Hop-by-hop step-through: second slider zooms in on individual (sender→receiver) links | ✅ complete |
+| `viz/` — "animate hops" checkbox: Play/Pause drives hop slider for full hop-level playback | ✅ complete |
+| `viz/` — Trace validation: mismatch warning when trace topology/nodes don't match loaded topology | ✅ complete |
+| `tracer.to_dict()` — embeds `topology` (filename) and `nodes` list for cross-checking in viz | ✅ complete |
 
 ### Key invariants
 
@@ -318,7 +323,8 @@ by `unique_receivers` to see which adversarial nodes saw which packets.
 | Date | Change |
 |------|--------|
 | 2026-03-16 | `tools/README.md` — full auth guide and CLI reference for scraper; FD-limit fix for large topologies |
-| 2026-03-17 | `viz/` Phase 2 — witness-count heatmap, packet step-through slider, sender/receiver highlight; `--trace-out` flag on orchestrator |
+| 2026-03-17 | `viz/` — hop-by-hop step-through slider; Play/Pause drives hop animation; "animate hops" checkbox; trace mismatch validation; trace JSON now embeds topology name + node list |
+| 2026-03-17 | `viz/` Phase 2 — witness-count heatmap, packet step-through slider, sender/receiver highlight; Play/Pause with speed control; `--trace-out` flag on orchestrator |
 | 2026-03-17 | `viz/` Phase 1 — static topology viewer with geo map (OpenStreetMap) and force-directed layouts; shortened node labels; hover detail panel |
 | 2026-03-16 | `viz/` subdirectory planned — static topology viewer + trace overlay (Dash + Plotly + dash-cytoscape) |
 | 2026-03-16 | `tools/fetch_topology.py` — live network scraper for meshcore-mqtt-live-map |

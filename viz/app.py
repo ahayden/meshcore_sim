@@ -342,6 +342,42 @@ def _packet_info_children(pkt: dict, idx: int, total: int) -> list:
     ]
 
 
+# ── Hop info helper (Phase 2) ────────────────────────────────────────────────
+
+_ROUTE_TYPE: dict[int, str] = {0: "FLOOD", 1: "DIRECT", 3: "TRANSPORT_FLOOD"}
+
+
+def _route_name(rt: int) -> str:
+    return _ROUTE_TYPE.get(rt, f"route{rt}")
+
+
+def _hop_info_children(pkt: dict, hop_idx: int) -> list:
+    """Sidebar content for the selected hop (or summary when hop_idx == -1)."""
+    hops = pkt.get("hops", [])
+    n = len(hops)
+    if hop_idx < 0 or hop_idx >= n:
+        return [
+            html.Div(
+                f"All {n} hop(s) shown",
+                style={"color": "#6c757d", "fontSize": "11px"},
+            )
+        ]
+    h = hops[hop_idx]
+    dt = h["t"] - pkt["first_seen_at"]
+    return [
+        html.Div(
+            f"Hop {hop_idx + 1} / {n}",
+            style={"fontWeight": "600", "marginBottom": "2px"},
+        ),
+        html.Div(
+            f"{_short(h['sender'])} → {_short(h['receiver'])}",
+            title=f"{h['sender']} → {h['receiver']}",
+        ),
+        html.Div(f"Route: {_route_name(h['route_type'])}"),
+        html.Div(f"t+{dt:.3f}s  paths: {h['path_count']}"),
+    ]
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 def _sidebar(
@@ -351,6 +387,7 @@ def _sidebar(
     geo: bool,
     trace: Optional[dict] = None,
     w_counts: Optional[dict[str, int]] = None,
+    trace_warning: Optional[str] = None,
 ) -> html.Div:
     role_counts: dict[str, int] = {}
     for n in nodes:
@@ -432,40 +469,51 @@ def _sidebar(
         if n_pkts > 0:
             play_row: Any = html.Div(
                 [
-                    html.Button(
-                        "▶",
-                        id="play-btn",
-                        n_clicks=0,
-                        title="Play / Pause",
+                    html.Div(
+                        [
+                            html.Button(
+                                "▶",
+                                id="play-btn",
+                                n_clicks=0,
+                                title="Play / Pause",
+                                style={
+                                    "padding": "2px 10px",
+                                    "fontSize": "14px",
+                                    "cursor": "pointer",
+                                    "border": "1px solid #ced4da",
+                                    "borderRadius": "4px",
+                                    "background": "#fff",
+                                    "lineHeight": "1.6",
+                                },
+                            ),
+                            dcc.Dropdown(
+                                id="play-speed",
+                                options=[
+                                    {"label": "0.5×", "value": 1000},
+                                    {"label": "1×",   "value": 500},
+                                    {"label": "2×",   "value": 250},
+                                    {"label": "5×",   "value": 100},
+                                ],
+                                value=500,
+                                clearable=False,
+                                style={"flex": "1", "fontSize": "12px", "minWidth": "0"},
+                            ),
+                        ],
                         style={
-                            "padding": "2px 10px",
-                            "fontSize": "14px",
-                            "cursor": "pointer",
-                            "border": "1px solid #ced4da",
-                            "borderRadius": "4px",
-                            "background": "#fff",
-                            "lineHeight": "1.6",
+                            "display": "flex",
+                            "gap": "6px",
+                            "alignItems": "center",
+                            "marginBottom": "4px",
                         },
                     ),
-                    dcc.Dropdown(
-                        id="play-speed",
-                        options=[
-                            {"label": "0.5×", "value": 1000},
-                            {"label": "1×",   "value": 500},
-                            {"label": "2×",   "value": 250},
-                            {"label": "5×",   "value": 100},
-                        ],
-                        value=500,
-                        clearable=False,
-                        style={"flex": "1", "fontSize": "12px", "minWidth": "0"},
+                    dcc.Checklist(
+                        id="hop-play-mode",
+                        options=[{"label": " animate hops", "value": "hop"}],
+                        value=[],
+                        style={"fontSize": "12px", "color": "#495057"},
                     ),
                 ],
-                style={
-                    "display": "flex",
-                    "gap": "6px",
-                    "alignItems": "center",
-                    "marginBottom": "6px",
-                },
+                style={"marginBottom": "6px"},
             )
             slider: Any = dcc.Slider(
                 id="packet-slider",
@@ -476,15 +524,44 @@ def _sidebar(
                 marks=None,
                 tooltip={"placement": "bottom", "always_visible": False},
             )
+            initial_hop_max = max(
+                (len(p.get("hops", [])) - 1 for p in packets), default=0
+            )
+            hop_slider: Any = dcc.Slider(
+                id="hop-slider",
+                min=-1,
+                max=max(initial_hop_max, 0),
+                step=1,
+                value=-1,
+                marks=None,
+                tooltip={"placement": "bottom", "always_visible": False},
+            )
         else:
             play_row = html.Span()   # empty placeholder
             slider = html.P(
                 "No packets in trace.",
                 style={"fontSize": "12px", "color": "#6c757d"},
             )
+            hop_slider = html.Span()
 
         trace_section = [
             html.Hr(style={"margin": "10px 0", "borderColor": "#dee2e6"}),
+            *(
+                [html.Div(
+                    trace_warning,
+                    style={
+                        "fontSize": "11px",
+                        "color": "#842029",
+                        "background": "#f8d7da",
+                        "border": "1px solid #f5c2c7",
+                        "borderRadius": "4px",
+                        "padding": "6px 8px",
+                        "marginBottom": "8px",
+                        "lineHeight": "1.4",
+                    },
+                )]
+                if trace_warning else []
+            ),
             html.Div(
                 "Witness heatmap",
                 style={"fontSize": "11px", "color": "#6c757d", "marginBottom": "4px"},
@@ -521,6 +598,21 @@ def _sidebar(
                     "fontSize": "12px",
                     "color": "#495057",
                     "marginTop": "8px",
+                    "lineHeight": "1.7",
+                },
+            ),
+            html.Hr(style={"margin": "10px 0", "borderColor": "#dee2e6"}),
+            html.Div(
+                "Step through hops:",
+                style={"fontSize": "12px", "color": "#6c757d", "marginBottom": "4px"},
+            ),
+            hop_slider,
+            html.Div(
+                id="hop-info",
+                style={
+                    "fontSize": "12px",
+                    "color": "#495057",
+                    "marginTop": "6px",
                     "lineHeight": "1.7",
                 },
             ),
@@ -583,9 +675,30 @@ def create_app(
     w_counts: Optional[dict[str, int]] = _witness_counts(trace) if trace else None
     max_w = max(w_counts.values(), default=0) if w_counts else 0
 
+    # Cross-check trace metadata against the loaded topology
+    trace_warning: Optional[str] = None
+    if trace:
+        trace_topo = trace.get("topology")
+        if trace_topo and trace_topo != topology_path.name:
+            trace_warning = (
+                f"⚠ Trace was recorded for '{trace_topo}' "
+                f"but topology is '{topology_path.name}'"
+            )
+        elif trace.get("nodes"):
+            topo_node_names = {n["name"] for n in nodes}
+            trace_node_names = set(trace["nodes"])
+            if not trace_node_names.intersection(topo_node_names):
+                trace_warning = (
+                    "⚠ No node names in this trace match the topology — "
+                    "wrong trace file?"
+                )
+
     app = dash.Dash(__name__, title=f"{topology_path.stem} — MeshCore viz")
 
-    sidebar = _sidebar(topology_path, nodes, edges, geo, trace=trace, w_counts=w_counts)
+    sidebar = _sidebar(
+        topology_path, nodes, edges, geo,
+        trace=trace, w_counts=w_counts, trace_warning=trace_warning,
+    )
 
     if geo:
         main_panel = dcc.Graph(
@@ -627,49 +740,118 @@ def create_app(
             @app.callback(
                 Output("geo-graph", "figure"),
                 Output("packet-info", "children"),
+                Output("hop-info", "children"),
                 Input("packet-slider", "value"),
+                Input("hop-slider", "value"),
             )
-            def _on_packet_geo(idx: int) -> tuple:
+            def _on_packet_geo(idx: int, hop_idx: int) -> tuple:
                 idx = idx or 0
+                hop_idx = hop_idx if hop_idx is not None else -1
                 pkt = packets[idx]
+                hops = pkt.get("hops", [])
+                if 0 <= hop_idx < len(hops):
+                    h = hops[hop_idx]
+                    senders   = [h["sender"]]
+                    receivers = [h["receiver"]]
+                else:
+                    senders   = pkt["unique_senders"]
+                    receivers = pkt["unique_receivers"]
                 fig = _geo_figure(
                     nodes, edges, w_counts, max_w,
-                    highlight_senders=pkt["unique_senders"],
-                    highlight_receivers=pkt["unique_receivers"],
+                    highlight_senders=senders,
+                    highlight_receivers=receivers,
                 )
-                return fig, _packet_info_children(pkt, idx, len(packets))
+                return (
+                    fig,
+                    _packet_info_children(pkt, idx, len(packets)),
+                    _hop_info_children(pkt, hop_idx),
+                )
 
         else:
             @app.callback(
                 Output("cyto-graph", "stylesheet"),
                 Output("packet-info", "children"),
+                Output("hop-info", "children"),
                 Input("packet-slider", "value"),
+                Input("hop-slider", "value"),
             )
-            def _on_packet_cyto(idx: int) -> tuple:
+            def _on_packet_cyto(idx: int, hop_idx: int) -> tuple:
                 idx = idx or 0
+                hop_idx = hop_idx if hop_idx is not None else -1
                 pkt = packets[idx]
+                hops = pkt.get("hops", [])
+                if 0 <= hop_idx < len(hops):
+                    h = hops[hop_idx]
+                    senders   = [h["sender"]]
+                    receivers = [h["receiver"]]
+                else:
+                    senders   = pkt["unique_senders"]
+                    receivers = pkt["unique_receivers"]
                 stylesheet = list(_CYTO_STYLESHEET)
-                for s in pkt["unique_senders"]:
+                for s in senders:
                     stylesheet.append({
                         "selector": f'node[id = "{s}"]',
                         "style": {"background-color": _SENDER_COLOUR},
                     })
-                for r in pkt["unique_receivers"]:
+                for r in receivers:
                     stylesheet.append({
                         "selector": f'node[id = "{r}"]',
                         "style": {"background-color": _RECEIVER_COLOUR},
                     })
-                return stylesheet, _packet_info_children(pkt, idx, len(packets))
+                return (
+                    stylesheet,
+                    _packet_info_children(pkt, idx, len(packets)),
+                    _hop_info_children(pkt, hop_idx),
+                )
 
-        # Advance slider on each interval tick (loops back to 0 at end)
+        # Advance on each interval tick.
+        # In normal mode: step packets one-by-one (loop).
+        # In hop mode: step hops within the current packet; when exhausted,
+        # advance to the next packet and start at hop 0.
         @app.callback(
             Output("packet-slider", "value"),
+            Output("hop-slider", "value", allow_duplicate=True),
             Input("play-interval", "n_intervals"),
             State("packet-slider", "value"),
+            State("hop-slider", "value"),
+            State("hop-slider", "max"),
+            State("hop-play-mode", "value"),
             prevent_initial_call=True,
         )
-        def _advance_packet(_, current: int) -> int:
-            return ((current or 0) + 1) % len(packets)
+        def _advance_play(
+            _,
+            pkt_idx: int,
+            hop_idx: int,
+            hop_max: int,
+            hop_mode: list,
+        ) -> tuple:
+            pkt_idx = pkt_idx or 0
+            hop_idx = hop_idx if hop_idx is not None else -1
+            hop_max = hop_max if hop_max is not None else 0
+            if hop_mode:
+                # Hop-by-hop mode: step through hops, then next packet
+                if hop_idx < hop_max:
+                    return dash.no_update, hop_idx + 1
+                else:
+                    return (pkt_idx + 1) % len(packets), 0
+            else:
+                # Packet mode: advance packet, leave hop slider unchanged
+                return (pkt_idx + 1) % len(packets), dash.no_update
+
+        # Reset hop slider when the packet changes (user drag or play advance).
+        # In hop mode: reset to hop 0 so animation starts from the first hop.
+        # In normal mode: reset to -1 (show all hops).
+        @app.callback(
+            Output("hop-slider", "max"),
+            Output("hop-slider", "value"),
+            Input("packet-slider", "value"),
+            State("hop-play-mode", "value"),
+        )
+        def _reset_hop(pkt_idx: int, hop_mode: list) -> tuple:
+            pkt_idx = pkt_idx or 0
+            n_hops = len(packets[pkt_idx].get("hops", []))
+            reset_val = 0 if hop_mode else -1
+            return max(n_hops - 1, 0), reset_val
 
         # Play/pause button toggles interval
         @app.callback(

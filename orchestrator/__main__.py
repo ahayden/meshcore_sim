@@ -126,7 +126,13 @@ async def run(args: object) -> int:
 
     if args.trace_out is not None:                                                     # type: ignore[attr-defined]
         with open(args.trace_out, "w") as fh:                                          # type: ignore[attr-defined]
-            json.dump(tracer.to_dict(), fh, indent=2)
+            json.dump(
+                tracer.to_dict(
+                    topology_path=args.topology,
+                    node_names=list(agents.keys()),
+                ),
+                fh, indent=2,
+            )
         log.info("Trace written to %s", args.trace_out)                               # type: ignore[attr-defined]
 
     return 0

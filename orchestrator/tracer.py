@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from .packet import (
@@ -163,13 +164,26 @@ class PacketTracer:
     # Serialisation
     # ------------------------------------------------------------------
 
-    def to_dict(self) -> dict:
+    def to_dict(
+        self,
+        topology_path: Optional[str] = None,
+        node_names: Optional[list] = None,
+    ) -> dict:
         """
         Return a JSON-serialisable dict of all trace data.
+
+        Optional metadata parameters:
+          topology_path — path to the topology JSON that was simulated; the
+                          filename (basename) is stored so the visualiser can
+                          warn when a trace is opened with the wrong topology.
+          node_names    — list of node names in the simulation; stored so the
+                          visualiser can cross-check node identity.
 
         Schema (version 1):
           {
             "schema_version": 1,
+            "topology": "<basename>.json",   # if topology_path provided
+            "nodes": ["name", ...],           # if node_names provided
             "packets": [
               {
                 "fingerprint":      str,
@@ -216,7 +230,13 @@ class PacketTracer:
             })
         # Sort by first_seen_at so the file reads chronologically
         packets.sort(key=lambda p: p["first_seen_at"])
-        return {"schema_version": 1, "packets": packets}
+        result: dict = {"schema_version": 1}
+        if topology_path is not None:
+            result["topology"] = Path(topology_path).name
+        if node_names is not None:
+            result["nodes"] = sorted(node_names)
+        result["packets"] = packets
+        return result
 
     # ------------------------------------------------------------------
     # Report
