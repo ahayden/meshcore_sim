@@ -30,7 +30,7 @@ from typing import Any, Optional
 import dash
 import dash_cytoscape as cyto
 import plotly.graph_objects as go
-from dash import Input, Output, dcc, html
+from dash import Input, Output, State, dcc, html
 
 # Register the extended cytoscape layout algorithms (cose-bilkent, etc.)
 cyto.load_extra_layouts()
