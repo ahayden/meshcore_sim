@@ -821,13 +821,16 @@ def create_app(
                 step_idx  = hop_idx if hop_idx is not None else -1
                 pkt   = packets[idx]
                 steps = all_steps[idx]
+                # Sender/receiver overlays only fire for a specific broadcast step.
+                # When step_idx == -1 ("all hops"), the background speaks for
+                # itself: heatmap in global mode, blue/grey binary in packet mode.
                 if 0 <= step_idx < len(steps):
                     step      = steps[step_idx]
                     senders   = [step[0]["sender"]]
                     receivers = [h["receiver"] for h in step]
                 else:
-                    senders   = pkt["unique_senders"]
-                    receivers = pkt["unique_receivers"]
+                    senders   = []
+                    receivers = []
                 pkt_witnesses = (
                     set(pkt["unique_receivers"]) if view_mode == "packet" else None
                 )
@@ -860,13 +863,16 @@ def create_app(
                 step_idx  = hop_idx if hop_idx is not None else -1
                 pkt   = packets[idx]
                 steps = all_steps[idx]
+                # Sender/receiver overlays only fire for a specific broadcast step.
+                # When step_idx == -1 ("all hops"), the background speaks for
+                # itself: heatmap in global mode, blue/grey binary in packet mode.
                 if 0 <= step_idx < len(steps):
                     step      = steps[step_idx]
                     senders   = [step[0]["sender"]]
                     receivers = [h["receiver"] for h in step]
                 else:
-                    senders   = pkt["unique_senders"]
-                    receivers = pkt["unique_receivers"]
+                    senders   = []
+                    receivers = []
                 stylesheet = list(_CYTO_STYLESHEET)
                 # Per-packet mode: override each node's base colour before overlays.
                 # Nodes that received this packet → muted green; others → grey.
