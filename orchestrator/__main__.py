@@ -40,6 +40,7 @@ async def run(args: object) -> int:
     if args.advert_interval is not None:   sim.advert_interval_secs = args.advert_interval  # type: ignore[attr-defined]
     if args.agent is not None:             sim.default_binary = args.agent            # type: ignore[attr-defined]
     if args.seed is not None:              sim.seed = args.seed                       # type: ignore[attr-defined]
+    if args.max_heap_kb is not None:       sim.default_max_heap_kb = args.max_heap_kb # type: ignore[attr-defined]
 
     rng = random.Random(sim.seed)
     metrics = MetricsCollector()
@@ -152,9 +153,17 @@ async def run(args: object) -> int:
     await asyncio.gather(*pending, return_exceptions=True)
 
     # ------------------------------------------------------------------
-    # Shutdown
+    # Shutdown — sample RSS before quitting so processes are still alive
     # ------------------------------------------------------------------
-    log.info("Simulation complete — shutting down node agents ...")
+    log.info("Simulation complete — sampling RSS ...")
+    rss_results = await asyncio.gather(
+        *(a.sample_rss_kb() for a in agents.values()), return_exceptions=True
+    )
+    for agent, rss in zip(agents.values(), rss_results):
+        if isinstance(rss, int):
+            metrics.record_rss(agent.config.name, rss)
+
+    log.info("Shutting down node agents ...")
     await asyncio.gather(*(agent.quit() for agent in agents.values()), return_exceptions=True)
 
     # ------------------------------------------------------------------

@@ -30,6 +30,7 @@ class NodeConfig:
     prv_key: Optional[str] = None          # 128 hex chars or None
     adversarial: Optional[AdversarialConfig] = None
     binary: Optional[str] = None           # per-node binary override (None → use SimulationConfig.default_binary)
+    max_heap_kb: Optional[int] = None      # per-node heap limit in KB (None → use SimulationConfig.default_max_heap_kb)
     lat: Optional[float] = None            # WGS-84 latitude  (ignored by simulator; for visualisation)
     lon: Optional[float] = None            # WGS-84 longitude (ignored by simulator; for visualisation)
 
@@ -84,6 +85,7 @@ class SimulationConfig:
     advert_interval_secs: float = 30.0
     epoch: int = 0                         # 0 → use wall-clock time
     default_binary: str = "./node_agent/build/node_agent"
+    default_max_heap_kb: Optional[int] = None  # heap limit applied to all nodes (None = no limit)
     seed: Optional[int] = None
 
 
@@ -128,6 +130,7 @@ def load_topology(path: str) -> TopologyConfig:
             )
         raw_lat = n.get("lat")
         raw_lon = n.get("lon")
+        raw_heap = n.get("max_heap_kb")
         nodes.append(NodeConfig(
             name=n["name"],
             relay=bool(n.get("relay", False)),
@@ -135,6 +138,7 @@ def load_topology(path: str) -> TopologyConfig:
             prv_key=n.get("prv_key"),
             adversarial=adv,
             binary=n.get("binary"),
+            max_heap_kb=int(raw_heap) if raw_heap is not None else None,
             lat=float(raw_lat) if raw_lat is not None else None,
             lon=float(raw_lon) if raw_lon is not None else None,
         ))
@@ -163,6 +167,10 @@ def load_topology(path: str) -> TopologyConfig:
         default_binary=(
             sim_raw.get("default_binary")
             or sim_raw.get("agent_binary", "./node_agent/build/node_agent")
+        ),
+        default_max_heap_kb=(
+            int(sim_raw["default_max_heap_kb"])
+            if sim_raw.get("default_max_heap_kb") is not None else None
         ),
         seed=sim_raw.get("seed"),
     )

@@ -59,6 +59,19 @@ Examples:
         help="Override path to node_agent binary",
     )
     p.add_argument(
+        "--max-heap-kb",
+        type=int,
+        default=None,
+        metavar="KB",
+        dest="max_heap_kb",
+        help=(
+            "Apply an RLIMIT_AS heap limit (in KB) to every node subprocess.  "
+            "Models constrained-memory devices.  "
+            "Note: enforcement depends on OS — enforced on Linux, "
+            "not guaranteed on macOS."
+        ),
+    )
+    p.add_argument(
         "--seed",
         type=int,
         default=None,

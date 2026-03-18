@@ -49,6 +49,12 @@ meshcore_sim/
 │   ├── arduino_shim/       Minimal Arduino Stream stub
 │   └── crypto_shim/        SHA-256, AES-128, Ed25519 via OpenSSL 3.x EVP
 │
+├── privatemesh/            Privacy-protocol experiments (separate binary)
+│   ├── CMakeLists.txt      Reuses all node_agent sources; overrides SimNode only
+│   ├── SimNode.h/.cpp      Modified routing — ONLY file that differs from node_agent
+│   └── build/
+│       └── privatemesh_agent   Built with: cmake -S . -B build && cmake --build build
+│
 ├── orchestrator/           Python package — simulation engine
 │   ├── __main__.py         Entry point (python3 -m orchestrator)
 │   ├── config.py           Topology JSON loader and dataclasses
@@ -255,7 +261,8 @@ python3 -m orchestrator <topology.json> [options]
 | `--warmup SECS` | from JSON | Override warmup period before traffic starts |
 | `--traffic-interval SECS` | from JSON | Override mean seconds between random text sends |
 | `--advert-interval SECS` | from JSON | Override advertisement re-flood interval |
-| `--agent PATH` | from JSON | Override path to `node_agent` binary |
+| `--agent PATH` | from JSON | Override path to `node_agent` binary (use `privatemesh/build/privatemesh_agent` for privacy experiments) |
+| `--max-heap-kb KB` | from JSON | Apply an `RLIMIT_AS` heap limit to every node subprocess (models constrained-memory devices; enforced on Linux, not guaranteed on macOS) |
 | `--seed N` | from JSON | RNG seed for reproducible loss/traffic decisions |
 | `--log-level` | `info` | `debug` / `info` / `warning` / `error` |
 | `--report FILE` | — | Write final metrics report to a file (always printed to stdout) |
@@ -465,6 +472,7 @@ An array of node objects.
 | `lat` | float | — | WGS-84 latitude in decimal degrees. Ignored by the simulator; retained for visualisation tools |
 | `lon` | float | — | WGS-84 longitude in decimal degrees. Ignored by the simulator; retained for visualisation tools |
 | `binary` | string | — | Override the node binary for this node only (falls back to `simulation.default_binary`) |
+| `max_heap_kb` | int | — | Per-node `RLIMIT_AS` heap limit in KB (falls back to `simulation.default_max_heap_kb`) |
 | `prv_key` | string | — | Fixed 128-hex-char (64-byte) Ed25519 private key. Omit for a fresh random identity on each run |
 | `adversarial` | object | — | Omit for an honest node; see [Adversarial nodes](#adversarial-nodes) |
 
@@ -546,6 +554,7 @@ reach `deep_valley` at all.
 | `advert_interval_secs` | float | `30.0` | How often to re-flood advertisements from all nodes |
 | `epoch` | int | `0` | Unix epoch sent to nodes on startup; `0` means use the real wall clock |
 | `default_binary` | string | `./node_agent/build/node_agent` | Default path to the node binary; individual nodes may override with a `binary` field |
+| `default_max_heap_kb` | int | — | Apply an `RLIMIT_AS` heap limit to all node subprocesses (KB); individual nodes may override with a `max_heap_kb` field. Omit for no limit. |
 | `seed` | int | — | RNG seed; omit for non-deterministic behaviour |
 
 ### `radio`

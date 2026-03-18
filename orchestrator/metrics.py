@@ -25,6 +25,7 @@ class MetricsCollector:
         # Per-node packet counts (orchestrator-level, not node-reported)
         self._tx: dict[str, int] = defaultdict(int)
         self._rx: dict[str, int] = defaultdict(int)
+        self._rss_kb: dict[str, int] = {}  # RSS snapshot at end of simulation
 
         # Drops
         self._link_loss_count: int = 0
@@ -62,6 +63,9 @@ class MetricsCollector:
 
     def record_collision(self, sender: str, receiver: str) -> None:
         self._collision_count += 1
+
+    def record_rss(self, node: str, rss_kb: int) -> None:
+        self._rss_kb[node] = rss_kb
 
     def record_send_attempt(self, sender: str, dest_pub: str, text: str) -> None:
         self._pending[text] = SendRecord(
@@ -150,6 +154,13 @@ class MetricsCollector:
                 lines.append(
                     f"    [{lat:6.0f} ms]  {r.sender} → {r.received_by}: {r.text!r}"
                 )
+            lines.append("")
+
+        # RSS snapshot (omitted when no samples were collected)
+        if self._rss_kb:
+            lines.append("  RSS at simulation end:")
+            for n in sorted(self._rss_kb):
+                lines.append(f"    {n:<{col}}  {self._rss_kb[n]:>6} KB")
             lines.append("")
 
         lines.append("=" * banner_w)

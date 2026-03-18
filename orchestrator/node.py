@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
@@ -31,6 +32,24 @@ class NodeState:
     known_peers: set[str] = field(default_factory=set)
     tx_count: int = 0
     rx_count: int = 0
+    rss_kb: int = 0          # RSS snapshot taken at end of simulation (0 = not sampled)
+
+
+def _make_heap_limit_fn(kb: int):
+    """Return a callable suitable for preexec_fn that applies RLIMIT_AS.
+
+    Called in the child process after fork() and before exec().  Errors are
+    silently swallowed so the child still starts even if the OS refuses the
+    limit (e.g. macOS does not enforce RLIMIT_AS on Apple Silicon).
+    """
+    import resource as _resource
+    limit = kb * 1024
+    def _apply():
+        try:
+            _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+        except (ValueError, OSError):
+            pass
+    return _apply
 
 
 class NodeAgent:
@@ -64,11 +83,23 @@ class NodeAgent:
         self._ready_event = asyncio.Event()
         cmd = self._build_cmd()
         log.debug("[%s] spawning: %s", self.config.name, " ".join(cmd))
+
+        # Apply heap limit if configured (per-node overrides simulation default).
+        heap_kb = (
+            self.config.max_heap_kb
+            if self.config.max_heap_kb is not None
+            else self.sim_config.default_max_heap_kb
+        )
+        preexec = _make_heap_limit_fn(heap_kb) if heap_kb is not None and sys.platform != "win32" else None
+        if heap_kb is not None:
+            log.debug("[%s] heap limit: %d KB", self.config.name, heap_kb)
+
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            **({"preexec_fn": preexec} if preexec is not None else {}),
         )
         # Send initial clock sync before waiting for ready
         await self.send_command({"type": "time", "epoch": self.sim_config.epoch})
@@ -189,6 +220,31 @@ class NodeAgent:
         # Always call the generic event callback (for metrics)
         if self.event_callback is not None:
             await self.event_callback(self.config.name, event)
+
+    # ------------------------------------------------------------------
+    # Resource measurement
+    # ------------------------------------------------------------------
+
+    async def sample_rss_kb(self) -> Optional[int]:
+        """Sample the current RSS of the subprocess in KB via `ps`.
+
+        Returns None if the process is not running or sampling fails.
+        Stores the result in self.state.rss_kb.
+        """
+        if self._proc is None or self._proc.returncode is not None:
+            return None
+        try:
+            ps = await asyncio.create_subprocess_exec(
+                "ps", "-o", "rss=", "-p", str(self._proc.pid),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(ps.communicate(), timeout=2.0)
+            rss = int(out.strip())
+            self.state.rss_kb = rss
+            return rss
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Internal helpers
