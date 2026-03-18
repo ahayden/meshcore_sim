@@ -18,6 +18,101 @@ static void bytes_to_hex(char* out, const uint8_t* in, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// Proactive next-hop routing table  (experiment: nexthop)
+//
+// Built from advertisement packets received during the warmup flood.  Each
+// entry maps a 2-byte destination prefix to the shortest reversed relay path
+// (suitable for passing directly to sendDirect) and tracks an age counter so
+// stale entries are evicted after RT_MAX_AGE advertisement cycles.
+//
+// Memory budget: RT_MAX_ROUTES × sizeof(RouteEntry) = 32 × 14 = 448 bytes.
+// ---------------------------------------------------------------------------
+#define RT_MAX_ROUTES  32   // number of table slots
+#define RT_MAX_AGE      3   // expire after this many advert cycles without refresh
+#define RT_PATH_CAP     8   // max relay-path bytes stored per entry (8 hops @ 1 B each)
+#define RT_AGE_EVERY   16   // increment ages every N adverts received
+
+struct RouteEntry {
+    uint8_t dest[2];            // first 2 bytes of destination public key
+    uint8_t path[RT_PATH_CAP];  // reversed relay path bytes (for sendDirect)
+    uint8_t path_bytes;         // byte count in path[] (0 = direct neighbour)
+    uint8_t hash_sz;            // bytes per relay hash (normally 1 per PATH_HASH_SIZE)
+    uint8_t metric;             // hop count to destination
+    uint8_t age;                // incremented each cycle; reset on refresh
+};
+
+static RouteEntry rt_table[RT_MAX_ROUTES];
+static uint8_t    rt_count       = 0;   // live entries
+static uint32_t   rt_advert_seen = 0;   // total adverts received (drives aging)
+
+static RouteEntry* rt_find(const uint8_t dest[2]) {
+    for (uint8_t i = 0; i < rt_count; i++) {
+        if (rt_table[i].dest[0] == dest[0] && rt_table[i].dest[1] == dest[1])
+            return &rt_table[i];
+    }
+    return nullptr;
+}
+
+static void rt_age_entries() {
+    uint8_t i = 0;
+    while (i < rt_count) {
+        if (++rt_table[i].age > RT_MAX_AGE) {
+            rt_table[i] = rt_table[--rt_count];  // evict: swap with tail entry
+        } else {
+            i++;
+        }
+    }
+}
+
+// Insert or refresh a route.  Only updates an existing entry if the new metric
+// is equal or better (shorter path).  When the table is full, evicts the
+// stalest entry if the new metric is strictly better.
+static void rt_upsert(const uint8_t dest[2],
+                      const uint8_t* rev_path, uint8_t path_bytes,
+                      uint8_t hash_sz, uint8_t metric) {
+    RouteEntry* e = rt_find(dest);
+    if (e) {
+        if (metric <= e->metric) {
+            uint8_t n = std::min(path_bytes, (uint8_t)RT_PATH_CAP);
+            memcpy(e->path, rev_path, n);
+            e->path_bytes = n;
+            e->hash_sz    = hash_sz;
+            e->metric     = metric;
+            e->age        = 0;
+        }
+        return;
+    }
+    if (rt_count < RT_MAX_ROUTES) {
+        RouteEntry& ne = rt_table[rt_count++];
+        ne.dest[0]    = dest[0];
+        ne.dest[1]    = dest[1];
+        uint8_t n     = std::min(path_bytes, (uint8_t)RT_PATH_CAP);
+        memcpy(ne.path, rev_path, n);
+        ne.path_bytes = n;
+        ne.hash_sz    = hash_sz;
+        ne.metric     = metric;
+        ne.age        = 0;
+        return;
+    }
+    // Table full: evict stalest entry if new route is strictly better.
+    uint8_t worst = 0;
+    for (uint8_t i = 1; i < rt_count; i++) {
+        if (rt_table[i].age > rt_table[worst].age)
+            worst = i;
+    }
+    if (metric < rt_table[worst].metric) {
+        rt_table[worst].dest[0]    = dest[0];
+        rt_table[worst].dest[1]    = dest[1];
+        uint8_t n                  = std::min(path_bytes, (uint8_t)RT_PATH_CAP);
+        memcpy(rt_table[worst].path, rev_path, n);
+        rt_table[worst].path_bytes = n;
+        rt_table[worst].hash_sz    = hash_sz;
+        rt_table[worst].metric     = metric;
+        rt_table[worst].age        = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
 SimNode::SimNode(mesh::Radio& radio, mesh::MillisecondClock& ms,
@@ -136,9 +231,6 @@ void SimNode::onPeerDataRecv(mesh::Packet* packet, uint8_t type,
         c.has_path = true;
 
         // Flood a PATH packet back so the sender learns the direct path to us.
-        // createPathReturn encodes packet->path (the forward hashes) into a
-        // PATH payload encrypted to the sender — when the sender's
-        // onPeerPathRecv fires it stores those same hashes as its direct route.
         mesh::Packet* rpath = createPathReturn(
             c.id, c.shared_secret,
             packet->path, packet->path_len,
@@ -173,7 +265,7 @@ bool SimNode::onPeerPathRecv(mesh::Packet* /*packet*/, int sender_idx,
     return false;  // don't send reciprocal path automatically
 }
 
-void SimNode::onAdvertRecv(mesh::Packet* /*packet*/, const mesh::Identity& id,
+void SimNode::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id,
                            uint32_t /*timestamp*/,
                            const uint8_t* app_data, size_t app_data_len) {
     // Skip if this is our own advert.
@@ -204,6 +296,31 @@ void SimNode::onAdvertRecv(mesh::Packet* /*packet*/, const mesh::Identity& id,
              "{\"type\":\"advert\",\"pub\":\"%s\",\"name\":\"%s\"}",
              pub_hex, existing->name.c_str());
     emitJson(json);
+
+    // --- routing table update ---
+    // Extract source identity's relay path from this advert packet.
+    // packet->path is [r1, r2, ..., rN] (origin → us); sendDirect needs the
+    // reverse [rN, ..., r1] (nearest relay first).
+    uint8_t hash_sz  = packet->getPathHashSize();
+    uint8_t hash_cnt = packet->getPathHashCount();
+    uint8_t metric   = hash_cnt + 1;   // direct neighbour = 1 hop
+
+    uint8_t rev_path[RT_PATH_CAP] = {};
+    uint8_t rev_bytes = 0;
+    uint8_t copy_cnt  = std::min(hash_cnt,
+                                 (uint8_t)(RT_PATH_CAP / (hash_sz ? hash_sz : 1)));
+    for (uint8_t i = 0; i < copy_cnt; i++) {
+        uint8_t src_off = (hash_cnt - 1 - i) * hash_sz;
+        uint8_t dst_off = i * hash_sz;
+        memcpy(rev_path + dst_off, packet->path + src_off, hash_sz);
+        rev_bytes += hash_sz;
+    }
+
+    // Age all entries periodically (every RT_AGE_EVERY adverts received).
+    if ((++rt_advert_seen % RT_AGE_EVERY) == 0)
+        rt_age_entries();
+
+    rt_upsert(id.pub_key, rev_path, rev_bytes, hash_sz, metric);
 }
 
 void SimNode::onAckRecv(mesh::Packet* /*packet*/, uint32_t ack_crc) {
@@ -259,6 +376,20 @@ bool SimNode::sendTextTo(const std::string& dest_pub_hex,
         return false;
     }
 
+    // --- routing table lookup (nexthop experiment) ---
+    // Use a proactively cached multi-hop path from the advert flood, bypassing
+    // the flood → path-exchange round-trip required by standard node_agent.
+    // Only applies to multi-hop destinations (metric > 1); direct neighbours
+    // fall through to the standard path/flood logic below.
+    const RouteEntry* r = rt_find(target->id.pub_key);
+    if (r && r->metric > 1 && r->path_bytes > 0) {
+        sendDirect(pkt, r->path, r->path_bytes);
+        emitLog("nexthop: table-direct to %.8s (metric=%d age=%d)",
+                dest_pub_hex.c_str(), (int)r->metric, (int)r->age);
+        return true;
+    }
+
+    // Fallback: standard path-exchange direct or flood.
     if (target->has_path && !target->path.empty()) {
         sendDirect(pkt, target->path.data(), (uint8_t)target->path.size());
     } else {
@@ -301,23 +432,18 @@ void RoomServerNode::onPeerDataRecv(mesh::Packet* packet, uint8_t type,
 
     if (type != PAYLOAD_TYPE_TXT_MSG || len <= 4) return;
 
-    // Identify sender from the search-results table populated during
-    // searchPeersByHash (which runs before onPeerDataRecv is called).
     if (sender_idx < 0 || sender_idx >= (int)_search_results.size()) return;
     int idx = _search_results[sender_idx];
     Contact& sender = _contacts[idx];
 
-    // Extract the text (skip 4-byte timestamp prefix).
     const char* raw_text = (const char*)(data + 4);
     size_t      raw_len  = len - 4;
 
-    // Build escaped versions for JSON and for the forwarded body.
     char esc_name[128], esc_text[256];
     json_escape(esc_name, sizeof(esc_name),
                 sender.name.c_str(), sender.name.size());
     json_escape(esc_text, sizeof(esc_text), raw_text, raw_len);
 
-    // Emit room_post event so the orchestrator can surface it.
     char pub_hex[PUB_KEY_SIZE * 2 + 1];
     bytes_to_hex(pub_hex, sender.id.pub_key, PUB_KEY_SIZE);
     char event_json[640];
@@ -327,15 +453,13 @@ void RoomServerNode::onPeerDataRecv(mesh::Packet* packet, uint8_t type,
              pub_hex, esc_name, esc_text);
     emitJson(event_json);
 
-    // Forward "[sender_name]: text" to every OTHER contact.
-    // Build the forwarded body once; sendTextTo re-encrypts per recipient.
     char fwd[320];
     snprintf(fwd, sizeof(fwd), "[%s]: %.*s",
              sender.name.c_str(), (int)raw_len, raw_text);
     std::string fwd_str(fwd);
 
     for (int ci = 0; ci < (int)_contacts.size(); ci++) {
-        if (ci == idx) continue;   // don't echo back to sender
+        if (ci == idx) continue;
         char dest_hex[PUB_KEY_SIZE * 2 + 1];
         bytes_to_hex(dest_hex, _contacts[ci].id.pub_key, PUB_KEY_SIZE);
         sendTextTo(std::string(dest_hex), fwd_str);

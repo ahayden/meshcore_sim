@@ -1,0 +1,106 @@
+"""
+scenarios.py — pre-defined experiment scenarios and binary paths.
+
+Each Scenario encapsulates a topology factory + timing parameters.
+Binary constants point to the compiled agents in the repo tree.
+
+Usage:
+
+    from experiments.scenarios import GRID_3X3, BASELINE_BINARY, NEXTHOP_BINARY
+    from experiments import run_scenario, compare
+
+    results = [run_scenario(GRID_3X3, b) for b in ALL_BINARIES]
+    compare(results).print()
+"""
+
+from __future__ import annotations
+
+import os
+
+from experiments.runner import Scenario
+
+# Resolve paths relative to the repo root (two levels above this file).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ---------------------------------------------------------------------------
+# Binary paths
+# ---------------------------------------------------------------------------
+
+BASELINE_BINARY = os.path.join(_REPO_ROOT, "node_agent", "build", "node_agent")
+NEXTHOP_BINARY  = os.path.join(_REPO_ROOT, "privatemesh", "nexthop", "build", "nexthop_agent")
+
+# All experiment binaries in registration order (used by the CLI).
+ALL_BINARIES: list[str] = [BASELINE_BINARY, NEXTHOP_BINARY]
+
+
+def available_binaries() -> list[str]:
+    """Return only the binaries that exist on disk."""
+    return [b for b in ALL_BINARIES if os.path.isfile(b) and os.access(b, os.X_OK)]
+
+
+# ---------------------------------------------------------------------------
+# Topology factories (imported from sim_tests helpers to avoid duplication)
+# ---------------------------------------------------------------------------
+# These factories are the same ones used in the integration test suite,
+# ensuring experiment results are directly comparable to test baselines.
+
+from sim_tests.helpers import (  # noqa: E402 (import after path setup)
+    grid_topo_config,
+    linear_three_config,
+)
+
+# ---------------------------------------------------------------------------
+# Scenarios
+# ---------------------------------------------------------------------------
+
+#: Quick sanity check: 3-node linear topology.
+#: Expected baseline behaviour: flood on round 1, direct on round 2.
+LINEAR = Scenario(
+    name="linear/3-node",
+    topo_factory=lambda: linear_three_config(
+        warmup_secs=2.0,
+        duration_secs=30.0,
+        seed=42,
+    ),
+    warmup_secs=2.0,
+    settle_secs=2.0,
+    rounds=2,
+    seed=42,
+)
+
+#: 3×3 grid — matches the privacy-baseline test topology exactly.
+#: Flood witness count ≈ 22; direct ≈ 12–14.
+GRID_3X3 = Scenario(
+    name="grid/3x3",
+    topo_factory=lambda: grid_topo_config(
+        3, 3,
+        warmup_secs=3.0,
+        duration_secs=30.0,
+        seed=42,
+    ),
+    warmup_secs=3.0,
+    settle_secs=3.0,
+    rounds=2,
+    seed=42,
+)
+
+#: 10×10 grid — stress test; 100 nodes, routing-table eviction exercised.
+GRID_10X10 = Scenario(
+    name="grid/10x10",
+    topo_factory=lambda: grid_topo_config(
+        10, 10,
+        warmup_secs=10.0,
+        duration_secs=60.0,
+        seed=42,
+    ),
+    warmup_secs=10.0,
+    settle_secs=5.0,
+    rounds=3,
+    seed=42,
+)
+
+#: All scenarios in the default run order (fastest first).
+ALL_SCENARIOS: list[Scenario] = [LINEAR, GRID_3X3, GRID_10X10]
+
+#: Map name → Scenario for CLI lookup.
+SCENARIO_BY_NAME: dict[str, Scenario] = {s.name: s for s in ALL_SCENARIOS}

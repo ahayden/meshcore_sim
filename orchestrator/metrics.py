@@ -93,6 +93,38 @@ class MetricsCollector:
     # Report
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Computed properties (for programmatic access by experiments/)
+    # ------------------------------------------------------------------
+
+    @property
+    def delivered_count(self) -> int:
+        return len(self._completed)
+
+    @property
+    def attempted_count(self) -> int:
+        return len(self._completed) + len(self._pending)
+
+    @property
+    def delivery_rate(self) -> float:
+        """Fraction of attempted messages that were delivered (0.0–1.0)."""
+        total = self.attempted_count
+        return self.delivered_count / total if total else 0.0
+
+    @property
+    def avg_latency_ms(self) -> float:
+        """Average send→receive latency in milliseconds (0.0 if none delivered)."""
+        latencies = [
+            (r.received_at - r.sent_at) * 1000.0
+            for r in self._completed
+            if r.received_at is not None
+        ]
+        return sum(latencies) / len(latencies) if latencies else 0.0
+
+    @property
+    def collision_count(self) -> int:
+        return self._collision_count
+
     def report(self) -> str:
         # Per-node TX / RX — column width adapts to the longest node name
         all_nodes = sorted(set(self._tx) | set(self._rx))
