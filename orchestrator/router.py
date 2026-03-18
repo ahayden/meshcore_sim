@@ -11,6 +11,9 @@ import random
 from typing import Optional
 
 from .adversarial import AdversarialFilter
+from .airtime import lora_airtime_ms
+from .channel import ChannelModel
+from .config import RadioConfig
 from .metrics import MetricsCollector
 from .node import NodeAgent
 from .topology import EdgeLink, Topology
@@ -36,12 +39,16 @@ class PacketRouter:
         metrics: MetricsCollector,
         rng: random.Random,
         tracer: Optional[PacketTracer] = None,
+        radio: Optional[RadioConfig] = None,
+        channel: Optional[ChannelModel] = None,
     ) -> None:
         self._topology = topology
         self._agents = agents
         self._metrics = metrics
         self._rng = rng
         self._tracer = tracer
+        self._radio = radio
+        self._channel = channel
 
         # Build adversarial filters for nodes that have an adversarial config
         self._filters: dict[str, AdversarialFilter] = {}
@@ -65,17 +72,38 @@ class PacketRouter:
         self._metrics.record_tx(sender_name)
         log.debug("[router] tx from %s  len=%d", sender_name, len(hex_data) // 2)
 
+        # Compute on-air time when a radio model is configured.
+        airtime_ms = 0.0
+        if self._radio is not None:
+            airtime_ms = lora_airtime_ms(
+                sf=self._radio.sf,
+                bw_hz=self._radio.bw_hz,
+                cr=self._radio.cr,
+                payload_bytes=len(hex_data) // 2,
+                preamble_symbols=self._radio.preamble_symbols,
+            )
+
+        tx_start = asyncio.get_event_loop().time()
+        tx_end   = tx_start + airtime_ms / 1000.0
+
         # Register the transmission with the path tracer; capture tx_id so all
         # concurrent deliveries from this broadcast share the same identifier.
         tx_id: Optional[int] = None
         if self._tracer is not None:
-            t = asyncio.get_event_loop().time()
-            tx_id = self._tracer.record_tx(sender_name, hex_data, t)
+            tx_id = self._tracer.record_tx(sender_name, hex_data, tx_start,
+                                           airtime_ms=airtime_ms)
+
+        # Register with the channel model (contention detection).
+        if self._channel is not None and tx_id is not None:
+            self._channel.register_tx(sender_name, tx_start, tx_end, tx_id)
+            # Prune records older than 5 s to bound memory growth.
+            self._channel.expire_before(tx_start - 5.0)
 
         for link in self._topology.neighbours(sender_name):
             # Fire-and-forget: each delivery is independent
             asyncio.create_task(
-                self._deliver_to(sender_name, link, hex_data, tx_id),
+                self._deliver_to(sender_name, link, hex_data, tx_id,
+                                 tx_start=tx_start, tx_end=tx_end),
                 name=f"deliver-{sender_name}->{link.other}",
             )
 
@@ -84,8 +112,13 @@ class PacketRouter:
     # ------------------------------------------------------------------
 
     async def _deliver_to(
-        self, sender: str, link: EdgeLink, hex_data: str,
+        self,
+        sender: str,
+        link: EdgeLink,
+        hex_data: str,
         tx_id: Optional[int] = None,
+        tx_start: Optional[float] = None,
+        tx_end: Optional[float] = None,
     ) -> None:
         receiver_name = link.other
 
@@ -115,16 +148,38 @@ class PacketRouter:
                 log.debug("[router] adv-corrupt %s→%s", sender, receiver_name)
                 hex_data = result
 
-        # 3. Propagation delay
-        if link.latency_ms > 0.0:
+        # 3. Propagation delay.
+        # When airtime is modelled (tx_end is set), we wait until the full
+        # transmission completes at the sender plus the link propagation delay.
+        # This means delivery_time = tx_end + latency_ms, which is always ≥ the
+        # old behaviour of just sleeping latency_ms.
+        # When tx_end is None (no RF model / replay drainer), fall back to the
+        # original sleep(latency_ms) behaviour.
+        if tx_end is not None:
+            now  = asyncio.get_event_loop().time()
+            wait = max((tx_end + link.latency_ms / 1000.0) - now, 0.0)
+            if wait > 0.0:
+                await asyncio.sleep(wait)
+        elif link.latency_ms > 0.0:
             await asyncio.sleep(link.latency_ms / 1000.0)
 
-        # 4. Record successful delivery in the path tracer
+        # 4. RF collision check (contention model).
+        if (self._channel is not None
+                and tx_id is not None
+                and tx_start is not None
+                and tx_end is not None):
+            if self._channel.is_lost(sender, receiver_name,
+                                     tx_start, tx_end, tx_id):
+                self._metrics.record_collision(sender, receiver_name)
+                log.debug("[router] collision %s→%s", sender, receiver_name)
+                return
+
+        # 5. Record successful delivery in the path tracer
         if self._tracer is not None:
             t = asyncio.get_event_loop().time()
             self._tracer.record_rx(sender, receiver_name, hex_data, t, tx_id)
 
-        # 5. Deliver
+        # 6. Deliver
         receiver = self._agents.get(receiver_name)
         if receiver is None:
             return

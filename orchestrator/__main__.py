@@ -10,7 +10,9 @@ import logging
 import random
 import resource
 import sys
+from typing import Optional
 
+from .channel import ChannelModel
 from .cli import build_parser
 from .config import load_topology
 from .metrics import MetricsCollector
@@ -73,9 +75,51 @@ async def run(args: object) -> int:
         log.info("  %-20s  %s  pub=%s", name, role, pub_short)
 
     # ------------------------------------------------------------------
+    # RF physical-layer model (airtime / contention)
+    # ------------------------------------------------------------------
+    rf_model = args.rf_model  # type: ignore[attr-defined]
+    radio    = topo_cfg.radio if rf_model != "none" else None
+
+    if rf_model != "none" and topo_cfg.radio is None:
+        log.warning(
+            "--rf-model=%s requested but topology has no 'radio' section; "
+            "falling back to --rf-model=none",
+            rf_model,
+        )
+        radio = None
+
+    channel: Optional[ChannelModel] = None
+    if rf_model == "contention" and radio is not None:
+        neighbors: dict[str, set[str]] = {
+            name: {link.other for link in topology.neighbours(name)}
+            for name in topology.all_names()
+        }
+        nodes_with_pos = [n for n in topo_cfg.nodes
+                          if n.lat is not None and n.lon is not None]
+        if len(nodes_with_pos) == len(topo_cfg.nodes):
+            positions: Optional[dict[str, tuple[float, float]]] = {
+                n.name: (n.lat, n.lon)   # type: ignore[arg-type]
+                for n in topo_cfg.nodes
+            }
+            log.info("RF contention model: capture effect enabled (6 dB threshold)")
+        else:
+            positions = None
+            log.info(
+                "RF contention model: hard collision (not all nodes have lat/lon)"
+            )
+        channel = ChannelModel(neighbors=neighbors, positions=positions)
+
+    if radio is not None:
+        log.info(
+            "RF model: %s  SF=%d  BW=%d Hz  CR=4/%d",
+            rf_model, radio.sf, radio.bw_hz, radio.cr + 4,
+        )
+
+    # ------------------------------------------------------------------
     # Wire up router (registers callbacks on all agents)
     # ------------------------------------------------------------------
-    router = PacketRouter(topology, agents, metrics, rng, tracer=tracer)
+    router = PacketRouter(topology, agents, metrics, rng, tracer=tracer,
+                          radio=radio, channel=channel)
     traffic = TrafficGenerator(agents, topology, sim, metrics, rng)
 
     # ------------------------------------------------------------------

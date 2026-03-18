@@ -31,6 +31,7 @@ class MetricsCollector:
         self._adv_drop_count: int = 0
         self._adv_corrupt_count: int = 0
         self._adv_replay_count: int = 0
+        self._collision_count: int = 0
 
         # Message delivery tracking — keyed by message text
         # (unique per send because TrafficGenerator embeds a timestamp)
@@ -58,6 +59,9 @@ class MetricsCollector:
 
     def record_adversarial_replay(self, node: str) -> None:
         self._adv_replay_count += 1
+
+    def record_collision(self, sender: str, receiver: str) -> None:
+        self._collision_count += 1
 
     def record_send_attempt(self, sender: str, dest_pub: str, text: str) -> None:
         self._pending[text] = SendRecord(
@@ -128,6 +132,7 @@ class MetricsCollector:
 
         # Drop / adversarial counts
         lines.append(f"  Link-level packet loss:  {self._link_loss_count}")
+        lines.append(f"  RF collisions dropped:   {self._collision_count}")
         lines.append(f"  Adversarial drops:       {self._adv_drop_count}")
         lines.append(f"  Adversarial corruptions: {self._adv_corrupt_count}")
         lines.append(f"  Adversarial replays:     {self._adv_replay_count}")

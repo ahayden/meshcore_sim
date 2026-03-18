@@ -60,6 +60,15 @@ class EdgeConfig:
 
 
 @dataclass
+class RadioConfig:
+    """LoRa radio parameters shared by all nodes in the simulation."""
+    sf: int = 9              # spreading factor (7–12)
+    bw_hz: int = 125_000     # bandwidth in Hz
+    cr: int = 1              # coding-rate offset: 1=CR4/5, 2=CR4/6, 3=CR4/7, 4=CR4/8
+    preamble_symbols: int = 8
+
+
+@dataclass
 class SimulationConfig:
     warmup_secs: float = 5.0
     duration_secs: float = 60.0
@@ -75,6 +84,7 @@ class TopologyConfig:
     nodes: list[NodeConfig]
     edges: list[EdgeConfig]
     simulation: SimulationConfig
+    radio: Optional[RadioConfig] = None   # present only when topology defines RF params
 
 
 # ---------------------------------------------------------------------------
@@ -151,4 +161,14 @@ def load_topology(path: str) -> TopologyConfig:
     if sim.epoch == 0:
         sim.epoch = int(time.time())
 
-    return TopologyConfig(nodes=nodes, edges=edges, simulation=sim)
+    radio = None
+    radio_raw = raw.get("radio")
+    if radio_raw is not None:
+        radio = RadioConfig(
+            sf=int(radio_raw.get("sf", 9)),
+            bw_hz=int(radio_raw.get("bw_hz", 125_000)),
+            cr=int(radio_raw.get("cr", 1)),
+            preamble_symbols=int(radio_raw.get("preamble_symbols", 8)),
+        )
+
+    return TopologyConfig(nodes=nodes, edges=edges, simulation=sim, radio=radio)

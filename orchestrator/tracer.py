@@ -42,6 +42,7 @@ class HopRecord:
     path_count: int        # number of relay hashes in path[] at TX time
     tx_id: Optional[int]   # monotonic counter, one per TX event;
                            # all hops sharing a tx_id came from the same broadcast
+    airtime_ms: float = 0.0  # on-air time of the TX event (0 when not modelled)
 
 
 @dataclass
@@ -96,17 +97,23 @@ class PacketTracer:
         # Monotonic counter: incremented once per TX event so all deliveries
         # from the same broadcast share a tx_id.
         self._tx_counter: int = 0
+        # tx_id → airtime_ms recorded at TX time (0.0 when not modelled)
+        self._tx_airtime: dict[int, float] = {}
 
     # ------------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------------
 
-    def record_tx(self, sender: str, hex_data: str, t: float) -> Optional[int]:
+    def record_tx(
+        self, sender: str, hex_data: str, t: float, airtime_ms: float = 0.0
+    ) -> Optional[int]:
         """
         Register a TX event.  Creates a new PacketTrace if this fingerprint
         is new.  Returns a tx_id (monotonic int) that should be passed to every
         record_rx() call that belongs to this broadcast, or None if the packet
         cannot be decoded.
+
+        airtime_ms — on-air duration of this broadcast (0.0 when not modelled).
         """
         info = decode_packet(hex_data)
         if info is None:
@@ -120,6 +127,7 @@ class PacketTracer:
                 first_sender=sender,
             )
         self._tx_counter += 1
+        self._tx_airtime[self._tx_counter] = airtime_ms
         return self._tx_counter
 
     def record_rx(
@@ -152,6 +160,7 @@ class PacketTracer:
                 first_sender=sender,
             )
             self._traces[fp] = trace
+        airtime_ms = self._tx_airtime.get(tx_id, 0.0) if tx_id is not None else 0.0
         trace.hops.append(HopRecord(
             t=t,
             sender=sender,
@@ -159,6 +168,7 @@ class PacketTracer:
             route_type=info.route_type,
             path_count=info.path_count,
             tx_id=tx_id,
+            airtime_ms=airtime_ms,
         ))
 
     # ------------------------------------------------------------------
@@ -236,12 +246,13 @@ class PacketTracer:
                 "unique_receivers":  sorted(tr.unique_receivers),
                 "hops": [
                     {
-                        "t":          h.t,
-                        "sender":     h.sender,
-                        "receiver":   h.receiver,
-                        "route_type": h.route_type,
-                        "path_count": h.path_count,
-                        "tx_id":      h.tx_id,
+                        "t":           h.t,
+                        "sender":      h.sender,
+                        "receiver":    h.receiver,
+                        "route_type":  h.route_type,
+                        "path_count":  h.path_count,
+                        "tx_id":       h.tx_id,
+                        "airtime_ms":  h.airtime_ms,
                     }
                     for h in tr.hops
                 ],
