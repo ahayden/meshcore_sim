@@ -1,8 +1,9 @@
 {
   "_comment": "10\u00d710 grid topology. SOURCE=n_0_0 (endpoint) \u2192 DEST=n_9_9 (endpoint). All 98 interior nodes are relays.",
   "radio": {
-    "sf": 9,
-    "bw_hz": 125000,
+    "_comment": "MeshCore source defaults (simple_repeater/MyMesh.cpp): SF10 / BW250 / CR4-5",
+    "sf": 10,
+    "bw_hz": 250000,
     "cr": 1,
     "preamble_symbols": 8
   },

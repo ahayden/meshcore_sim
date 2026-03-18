@@ -61,9 +61,17 @@ class EdgeConfig:
 
 @dataclass
 class RadioConfig:
-    """LoRa radio parameters shared by all nodes in the simulation."""
-    sf: int = 9              # spreading factor (7–12)
-    bw_hz: int = 125_000     # bandwidth in Hz
+    """LoRa radio parameters shared by all nodes in the simulation.
+
+    Defaults match the MeshCore source (simple_repeater/MyMesh.cpp):
+      SF=10, BW=250 kHz, CR4/5.
+
+    Note on cr: we use the coding-rate *offset* (RadioLib denominator minus 4),
+    i.e. cr=1 means CR4/5 (RadioLib CR=5), cr=4 means CR4/8 (RadioLib CR=8).
+    MeshCore source uses the denominator directly (LORA_CR 5 = CR4/5 = cr=1 here).
+    """
+    sf: int = 10             # spreading factor (7–12); MeshCore default 10
+    bw_hz: int = 250_000     # bandwidth in Hz; MeshCore default 250 kHz
     cr: int = 1              # coding-rate offset: 1=CR4/5, 2=CR4/6, 3=CR4/7, 4=CR4/8
     preamble_symbols: int = 8
 

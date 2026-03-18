@@ -171,6 +171,14 @@ def fetch_snapshot(
     )
 
 
+# MeshCore source defaults — simple_repeater/MyMesh.cpp
+# cr uses the coding-rate *offset* convention (1 = CR4/5, i.e. RadioLib CR=5)
+_DEFAULT_SF       = 10
+_DEFAULT_BW_HZ    = 250_000
+_DEFAULT_CR       = 1
+_DEFAULT_PREAMBLE = 8
+
+
 # ---------------------------------------------------------------------------
 # Core conversion
 # ---------------------------------------------------------------------------
@@ -187,6 +195,10 @@ def build_topology(
     traffic_interval_secs: float = 10.0,
     advert_interval_secs: float = 60.0,
     seed: int = 42,
+    sf: int = _DEFAULT_SF,
+    bw_hz: int = _DEFAULT_BW_HZ,
+    cr: int = _DEFAULT_CR,
+    preamble_symbols: int = _DEFAULT_PREAMBLE,
 ) -> tuple[dict, list[dict], list[dict]]:
     """
     Convert a /snapshot response to simulator topology JSON.
@@ -344,6 +356,12 @@ def build_topology(
                  for e in edges_raw]
 
     topology = {
+        "radio": {
+            "sf":               sf,
+            "bw_hz":            bw_hz,
+            "cr":               cr,
+            "preamble_symbols": preamble_symbols,
+        },
         "nodes": nodes_out,
         "edges": edges_out,
         "simulation": {
@@ -446,6 +464,29 @@ def main() -> None:
         "--seed", type=int, default=42,
         help="RNG seed in output JSON (default: 42)",
     )
+
+    radio = parser.add_argument_group(
+        "radio parameters",
+        "LoRa radio configuration written into the 'radio' section of the output JSON. "
+        "Used by --rf-model airtime/contention when running the simulator. "
+        f"Defaults match MeshCore source (SF{_DEFAULT_SF} / BW{_DEFAULT_BW_HZ//1000} kHz / CR4/5).",
+    )
+    radio.add_argument(
+        "--sf", type=int, default=_DEFAULT_SF, metavar="N",
+        help=f"Spreading factor 7–12 (default: {_DEFAULT_SF})",
+    )
+    radio.add_argument(
+        "--bw-hz", type=int, default=_DEFAULT_BW_HZ, metavar="HZ",
+        dest="bw_hz",
+        help=f"Bandwidth in Hz, e.g. 125000 / 250000 / 500000 (default: {_DEFAULT_BW_HZ})",
+    )
+    radio.add_argument(
+        "--cr", type=int, default=_DEFAULT_CR, metavar="N",
+        help=(
+            f"Coding-rate offset: 1=CR4/5, 2=CR4/6, 3=CR4/7, 4=CR4/8 (default: {_DEFAULT_CR}). "
+            "Note: MeshCore source uses the denominator (LORA_CR 5 = CR4/5 = --cr 1 here)."
+        ),
+    )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Print conversion statistics to stderr",
@@ -485,6 +526,9 @@ def main() -> None:
         warmup_secs=args.warmup_secs,
         duration_secs=args.duration_secs,
         seed=args.seed,
+        sf=args.sf,
+        bw_hz=args.bw_hz,
+        cr=args.cr,
     )
 
     if args.verbose:
@@ -494,6 +538,8 @@ def main() -> None:
         n_ep    = sum(1 for n in nodes_raw
                       if not n.get("relay") and not n.get("room_server"))
         n_rs    = sum(1 for n in nodes_raw if n.get("room_server"))
+        print(f"  Radio:    SF{args.sf} / BW{args.bw_hz//1000} kHz / CR4/{args.cr+4}",
+              file=sys.stderr)
         print(f"  Snapshot: {total_devs} devices, {total_edges} history edges",
               file=sys.stderr)
         print(f"  Output:   {len(nodes_raw)} nodes "
